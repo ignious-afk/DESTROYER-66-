@@ -2,7 +2,15 @@ const STORAGE_KEY = "destroyer66-state";
 const STORAGE_VERSION = 2;
 const TOTAL_DAYS = 66;
 const TOTAL_WEEKS = Math.ceil(TOTAL_DAYS / 7);
-const DAILY_TASKS = ["wakeUp", "sleep", "water", "study", "meditation"];
+const TASK_DEFINITIONS = [
+  { id: "wakeUp", type: "binary", label: profile => `Wake up at ${formatTime(profile.wakeTime)}`, xp: 10 },
+  { id: "sleep", type: "binary", label: profile => `Sleep by ${formatTime(profile.sleepTime)}`, xp: 10 },
+  { id: "water", type: "measurable", label: profile => "Water intake", target: profile => profile.waterLiters, unit: "L", step: 0.1, xp: 10 },
+  { id: "study", type: "measurable", label: profile => "Study / work", target: profile => profile.studyHours, unit: "hrs", step: 0.5, xp: 10 },
+  { id: "meditation", type: "measurable", label: profile => "Meditation", target: profile => profile.meditationMinutes, unit: "min", step: 1, xp: 10 }
+];
+
+const DAILY_TASKS = TASK_DEFINITIONS.map(task => task.id);
 
 const LEVELS = [
   { level: 1, xp: 0 },
@@ -100,8 +108,6 @@ const elements = {
   strengthComplete: document.getElementById("strengthComplete"),
   strengthToggleWrap: document.getElementById("strengthToggleWrap"),
   cardioPlan: document.getElementById("cardioPlan"),
-  cardioComplete: document.getElementById("cardioComplete"),
-  cardioToggleWrap: document.getElementById("cardioToggleWrap"),
   achievementGrid: document.getElementById("achievementGrid"),
   historySummary: document.getElementById("historySummary"),
   historyGrid: document.getElementById("historyGrid"),
@@ -118,6 +124,8 @@ const elements = {
   weekLabel: document.getElementById("weekLabel"),
   levelBadge: document.getElementById("levelBadge"),
   streakCounter: document.getElementById("streakCounter"),
+  topDayCounter: document.getElementById("topDayCounter"),
+  topStreakCounter: document.getElementById("topStreakCounter"),
   tabButtons: document.querySelectorAll(".tab-button"),
   dashboardTab: document.getElementById("dashboardTab"),
   historyTab: document.getElementById("historyTab")
@@ -149,11 +157,6 @@ function bindEvents() {
     });
   });
 
-  elements.cardioComplete.addEventListener("change", event => {
-    updateProgressRecord(renderedDayNumber, record => {
-      record.cardioComplete = event.target.checked;
-    });
-  });
 
   elements.tabButtons.forEach(button => {
     button.addEventListener("click", () => {
@@ -333,6 +336,7 @@ function generateRunningPlan(profile, weekIndex, splitIndex) {
 
   return {
     scheduled: true,
+    targetMeters: sessionMeters,
     label: `${sessionStyle} ${formatDistance(sessionMeters)}`,
     detail: `Session ${[0, 2, 4].indexOf(splitIndex) + 1} of 3 this week. Build steady aerobic endurance toward ${formatDistance(targetMeters)}.`
   };
@@ -474,6 +478,8 @@ function renderDashboard(dayPlan, dayRecord, stats, xpData) {
   elements.weekLabel.textContent = `Week ${dayPlan.weekNumber}`;
   elements.levelBadge.textContent = `Level ${xpData.current.level}`;
   elements.streakCounter.textContent = `${stats.currentStreak} day streak`;
+  elements.topDayCounter.textContent = `Day ${getCurrentDayNumber()} / ${TOTAL_DAYS}`;
+  elements.topStreakCounter.textContent = `🔥 ${stats.currentStreak}`;
 
   renderDailyTasks(dayRecord);
   renderStrength(dayPlan, dayRecord);
@@ -482,49 +488,49 @@ function renderDashboard(dayPlan, dayRecord, stats, xpData) {
 
 function renderDailyTasks(dayRecord) {
   const profile = appState.profile;
-  const taskConfigs = [
-    {
-      id: "wakeUp",
-      title: `Wake up at ${formatTime(profile.wakeTime)}`,
-      detail: "Start the day on schedule."
-    },
-    {
-      id: "sleep",
-      title: `Sleep by ${formatTime(profile.sleepTime)}`,
-      detail: "Protect recovery and sleep consistency."
-    },
-    {
-      id: "water",
-      title: `Drink ${profile.waterLiters.toFixed(1)} L water`,
-      detail: "Hit your hydration goal."
-    },
-    {
-      id: "study",
-      title: `Study / work for ${formatNumber(profile.studyHours)} hours`,
-      detail: "Deep work block for progress."
-    },
-    {
-      id: "meditation",
-      title: `Meditate ${profile.meditationMinutes} minutes`,
-      detail: "Train focus and emotional control."
-    }
-  ];
 
-  elements.dailyTaskList.innerHTML = taskConfigs
-    .map(task => `
-      <label class="task-item">
-        <div class="task-copy">
-          <strong>${task.title}</strong>
-          <span>${task.detail}</span>
+  elements.dailyTaskList.innerHTML = TASK_DEFINITIONS
+    .map(task => {
+      if (task.type === "binary") {
+        const checked = Boolean(dayRecord.taskChecks[task.id]);
+        const xpEarned = checked ? task.xp : 0;
+        return `
+          <div class="task-item ${checked ? "completed" : ""}">
+            <div class="task-copy">
+              <strong>${task.label(profile)}</strong>
+              <span>Binary task · ${xpEarned}/${task.xp} XP</span>
+            </div>
+            <label class="toggle-pill">
+              <input class="check-input" type="checkbox" data-task-id="${task.id}" ${checked ? "checked" : ""}>
+              <span>${checked ? "Done" : "Mark done"}</span>
+            </label>
+          </div>
+        `;
+      }
+
+      const target = task.target(profile);
+      const rawValue = Number(dayRecord.taskValues[task.id] || 0);
+      const value = clampNumber(rawValue, 0, target * 2, 0);
+      const progress = Math.min(1, target === 0 ? 0 : value / target);
+      const percent = Math.round(progress * 100);
+      const xpEarned = Math.round(task.xp * progress);
+
+      return `
+        <div class="task-item ${percent >= 100 ? "completed" : ""}">
+          <div class="task-copy">
+            <strong>${task.label(profile)} <span class="muted">(${target} ${task.unit})</span></strong>
+            <span>${percent}% complete · ${xpEarned}/${task.xp} XP</span>
+          </div>
+          <div class="task-input-row">
+            <input class="task-metric-input" type="number" min="0" step="${task.step}" value="${value}" data-task-value="${task.id}">
+            <span class="task-unit">${task.unit}</span>
+          </div>
+          <div class="progress-track">
+            <div class="progress-fill" style="width:${percent}%"></div>
+          </div>
         </div>
-        <input
-          class="check-input"
-          type="checkbox"
-          data-task-id="${task.id}"
-          ${dayRecord.taskChecks[task.id] ? "checked" : ""}
-        >
-      </label>
-    `)
+      `;
+    })
     .join("");
 
   elements.dailyTaskList.querySelectorAll("[data-task-id]").forEach(input => {
@@ -532,6 +538,15 @@ function renderDailyTasks(dayRecord) {
       const taskId = event.target.dataset.taskId;
       updateProgressRecord(renderedDayNumber, record => {
         record.taskChecks[taskId] = event.target.checked;
+      });
+    });
+  });
+
+  elements.dailyTaskList.querySelectorAll("[data-task-value]").forEach(input => {
+    input.addEventListener("input", event => {
+      const taskId = event.target.dataset.taskValue;
+      updateProgressRecord(renderedDayNumber, record => {
+        record.taskValues[taskId] = Number(event.target.value) || 0;
       });
     });
   });
@@ -555,17 +570,45 @@ function renderStrength(dayPlan, dayRecord) {
 }
 
 function renderCardio(dayPlan, dayRecord) {
+  if (!dayPlan.cardio.scheduled) {
+    elements.cardioPlan.innerHTML = `
+      <div class="exercise-item">
+        <strong>${dayPlan.cardio.label}</strong>
+        <span>${dayPlan.cardio.detail}</span>
+      </div>
+    `;
+    return;
+  }
+
+  const targetMeters = Number(dayPlan.cardio.targetMeters || 0);
+  const distance = clampNumber(dayRecord.cardioMeters || 0, 0, targetMeters * 2, 0);
+  const progress = Math.min(1, targetMeters === 0 ? 0 : distance / targetMeters);
+  const percent = Math.round(progress * 100);
+  const xpEarned = Math.round(30 * progress);
+
   elements.cardioPlan.innerHTML = `
-    <div class="exercise-item">
+    <div class="exercise-item ${percent >= 100 ? "completed" : ""}">
       <strong>${dayPlan.cardio.label}</strong>
       <span>${dayPlan.cardio.detail}</span>
+      <div class="task-input-row">
+        <input id="cardioDistanceInput" class="task-metric-input" type="number" min="0" step="0.1" value="${(distance / 1000).toFixed(1)}">
+        <span class="task-unit">km / target ${(targetMeters / 1000).toFixed(1)} km</span>
+      </div>
+      <div class="progress-track"><div class="progress-fill xp" style="width:${percent}%"></div></div>
+      <span>${percent}% complete · ${xpEarned}/30 XP</span>
     </div>
   `;
 
-  const shouldDisable = !dayPlan.cardio.scheduled;
-  elements.cardioComplete.checked = shouldDisable ? false : Boolean(dayRecord.cardioComplete);
-  elements.cardioComplete.disabled = shouldDisable;
-  elements.cardioToggleWrap.classList.toggle("disabled", shouldDisable);
+  const cardioInput = document.getElementById("cardioDistanceInput");
+  if (cardioInput) {
+    cardioInput.addEventListener("input", event => {
+      const valueKm = Number(event.target.value) || 0;
+      updateProgressRecord(renderedDayNumber, record => {
+        record.cardioMeters = Math.round(valueKm * 1000);
+        record.cardioComplete = record.cardioMeters >= targetMeters;
+      });
+    });
+  }
 }
 
 function renderAchievements() {
@@ -667,13 +710,16 @@ function getDayRecord(dayNumber) {
     appState.progress.dayRecords[String(dayNumber)] || {
       taskChecks: {
         wakeUp: false,
-        sleep: false,
-        water: false,
-        study: false,
-        meditation: false
+        sleep: false
+      },
+      taskValues: {
+        water: 0,
+        study: 0,
+        meditation: 0
       },
       strengthComplete: false,
-      cardioComplete: false
+      cardioComplete: false,
+      cardioMeters: 0
     }
   );
 }
@@ -730,24 +776,48 @@ function calculateStats() {
 }
 
 function calculateDayXP(dayPlan, dayRecord) {
-  const completedTaskCount = DAILY_TASKS.filter(taskId => dayRecord.taskChecks[taskId]).length;
-  const dailyTasksComplete = DAILY_TASKS.every(taskId => dayRecord.taskChecks[taskId]);
-  const workoutNeeded = dayPlan.strength.scheduled || dayPlan.cardio.scheduled;
-  const strengthDone = !dayPlan.strength.scheduled || dayRecord.strengthComplete;
-  const cardioDone = !dayPlan.cardio.scheduled || dayRecord.cardioComplete;
-  const workoutComplete = workoutNeeded && strengthDone && cardioDone;
+  const profile = appState.profile;
+  const taskXP = TASK_DEFINITIONS.reduce((total, task) => {
+    if (task.type === "binary") {
+      return total + (dayRecord.taskChecks[task.id] ? task.xp : 0);
+    }
+
+    const target = task.target(profile);
+    const actual = Number(dayRecord.taskValues[task.id] || 0);
+    const ratio = Math.max(0, Math.min(1, target === 0 ? 0 : actual / target));
+    return total + Math.round(task.xp * ratio);
+  }, 0);
+
+  const cardioRatio = dayPlan.cardio.scheduled
+    ? Math.max(0, Math.min(1, (dayRecord.cardioMeters || 0) / (dayPlan.cardio.targetMeters || 1)))
+    : 1;
+  const cardioXP = Math.round(30 * cardioRatio);
+  const strengthXP = dayPlan.strength.scheduled ? (dayRecord.strengthComplete ? 30 : 0) : 30;
+  const dailyTasksComplete = TASK_DEFINITIONS.every(task => getTaskCompletionRatio(task, dayRecord, profile) >= 1);
+  const workoutComplete = (!dayPlan.strength.scheduled || dayRecord.strengthComplete) && cardioRatio >= 1;
   const completionBonus = dailyTasksComplete ? 50 : 0;
-  const workoutXP = workoutComplete ? 30 : 0;
+  const workoutBonus = workoutComplete ? 20 : 0;
   const streakXP = isDayComplete(dayPlan, dayRecord) ? 5 : 0;
 
-  return completedTaskCount * 10 + workoutXP + completionBonus + streakXP;
+  return taskXP + cardioXP + strengthXP + completionBonus + workoutBonus + streakXP;
 }
 
 function isDayComplete(dayPlan, dayRecord) {
-  const tasksComplete = DAILY_TASKS.every(taskId => dayRecord.taskChecks[taskId]);
+  const profile = appState.profile;
+  const tasksComplete = TASK_DEFINITIONS.every(task => getTaskCompletionRatio(task, dayRecord, profile) >= 1);
   const strengthDone = !dayPlan.strength.scheduled || dayRecord.strengthComplete;
-  const cardioDone = !dayPlan.cardio.scheduled || dayRecord.cardioComplete;
+  const cardioDone = !dayPlan.cardio.scheduled || (dayRecord.cardioMeters || 0) >= (dayPlan.cardio.targetMeters || 0);
   return tasksComplete && strengthDone && cardioDone;
+}
+
+function getTaskCompletionRatio(task, dayRecord, profile) {
+  if (task.type === "binary") {
+    return dayRecord.taskChecks[task.id] ? 1 : 0;
+  }
+
+  const target = task.target(profile);
+  const actual = Number(dayRecord.taskValues[task.id] || 0);
+  return Math.max(0, Math.min(1, target === 0 ? 0 : actual / target));
 }
 
 function updateXP(totalXP) {
@@ -1107,16 +1177,21 @@ function normalizeProgress(progress) {
 function normalizeDayRecord(record) {
   const sourceRecord = record && typeof record === "object" ? record : {};
   const sourceTaskChecks = sourceRecord.taskChecks && typeof sourceRecord.taskChecks === "object" ? sourceRecord.taskChecks : {};
-  const taskChecks = {};
-
-  DAILY_TASKS.forEach(taskId => {
-    taskChecks[taskId] = Boolean(sourceTaskChecks[taskId]);
-  });
+  const sourceTaskValues = sourceRecord.taskValues && typeof sourceRecord.taskValues === "object" ? sourceRecord.taskValues : {};
 
   return {
-    taskChecks,
+    taskChecks: {
+      wakeUp: Boolean(sourceTaskChecks.wakeUp),
+      sleep: Boolean(sourceTaskChecks.sleep)
+    },
+    taskValues: {
+      water: clampNumber(sourceTaskValues.water, 0, 50, 0),
+      study: clampNumber(sourceTaskValues.study, 0, 24, 0),
+      meditation: clampNumber(sourceTaskValues.meditation, 0, 400, 0)
+    },
     strengthComplete: Boolean(sourceRecord.strengthComplete),
-    cardioComplete: Boolean(sourceRecord.cardioComplete)
+    cardioComplete: Boolean(sourceRecord.cardioComplete),
+    cardioMeters: clampNumber(sourceRecord.cardioMeters, 0, 100000, 0)
   };
 }
 
